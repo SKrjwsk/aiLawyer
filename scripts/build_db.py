@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Buduje bazę SQLite z FTS5 z data/parsed_corpus/*.json → data/lawdb.sqlite.
 
-Tabele: acts (akt + metadane z data/inforce), articles (jednostka; `variant` dla równoległych wersji),
+Tabele: units (ustępy artykułów, jednostki wektoryzacji), acts (akt + metadane z data/inforce), articles (jednostka; `variant` dla równoległych wersji),
 footnotes, articles_fts (FTS5, słowa bez ogonków). Indeks trigramowy tylko z --trigram (duży).
 
 Użycie:
@@ -12,7 +12,11 @@ import argparse
 import glob
 import json
 import sqlite3
+import sys
 from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).parent))
+from units import fill_units  # noqa: E402
 
 SCHEMA = """
 CREATE TABLE acts (
@@ -58,7 +62,7 @@ def build(parsed_dir: Path, db_path: Path, records: dict, trigram: bool) -> None
             continue
         db.execute(
             "INSERT INTO acts VALUES (?,?,?,?,?,?,?,?,?,?)",
-            (act["eli"], act.get("title") if act.get("title") != act["eli"] else rec.get("title"),
+            (act["eli"], act.get("title") if act.get("title") not in (None, act["eli"]) else rec.get("title"),
              rec.get("type"), rec.get("status"), act.get("unitKind"), act.get("group"),
              int(bool(act.get("stale"))), rec.get("announcementDate"), act.get("legalStatusDate"), act.get("source")))
         db.executemany("INSERT INTO footnotes VALUES (?,?,?)",
@@ -71,6 +75,7 @@ def build(parsed_dir: Path, db_path: Path, records: dict, trigram: bool) -> None
     if trigram:
         db.execute("INSERT INTO articles_tri(rowid, text) SELECT id, text FROM articles")
     db.commit()
+    print(f"jednostek (ustępy): {fill_units(db)}")
     db.close()
     print(f"pominięto obwieszczeń o t.j. (tekst jest w akcie bazowym): {skipped}")
 
@@ -81,7 +86,12 @@ def main() -> None:
     parser.add_argument("--db", default="data/lawdb.sqlite", type=Path)
     parser.add_argument("--inforce", default="data/inforce/*.jsonl")
     parser.add_argument("--trigram", action="store_true")
+    parser.add_argument("--units-only", action="store_true", help="tylko przebuduj tabelę units w istniejącej bazie")
     args = parser.parse_args()
+    if args.units_only:
+        db = sqlite3.connect(args.db)
+        print(f"jednostek (ustępy): {fill_units(db)}")
+        return
     build(args.parsed, args.db, load_records(args.inforce), args.trigram)
     db = sqlite3.connect(args.db)
     print(db.execute("SELECT (SELECT count(*) FROM acts), (SELECT count(*) FROM articles)").fetchone())
